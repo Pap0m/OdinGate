@@ -48,7 +48,7 @@ main :: proc() {
 
 	Blockchain.seal(&block, token_to_bytes, get_id)
 
-	proof: [][]byte = Blockchain.get_proof(&block, 2)
+	// proof: [][]byte = Blockchain.get_proof(&block, 2)
 	
 	fmt.printfln("Timestamp: %v", block.timestamp)
 	fmt.printfln("Transaction Count: %v", len(block.transactions))
