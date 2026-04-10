@@ -34,15 +34,19 @@ make_block :: proc($T: typeid, $K: typeid, allocator := context.allocator) -> Bl
 
 delete_block :: proc(block: ^Block($T, $K)) {
 	delete(block.transactions)
-	delete(block.merkle_root)
 	delete(block.tx_indices)
+	delete(block.merkle_root)
 
-	for rows in block.tree_levels {
-		// clean up all the rows of the matrix container
-		for s in rows do delete(s) // each encoded string needs freeing
-		delete(rows)
+	for level in block.tree_levels {
+		// level in [dynamic][]byte
+		for h in level {
+			// h is a []byte created by slice.clone()
+			delete(h)
+		}
+		// now delete the level dynamic array
+		delete(level)
 	}
-	// later clean up the actual matrix
+	// delete the outer container
 	delete(block.tree_levels)
 }
 
