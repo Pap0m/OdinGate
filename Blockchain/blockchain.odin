@@ -3,6 +3,7 @@ package Blockchain
 import "core:slice"
 import "core:crypto/hash"
 import "core:time"
+import "core:fmt"
 
 Block :: struct($T: typeid, $K: typeid) {
 	prev_block:   ^Block(T, K),
@@ -120,6 +121,7 @@ seal :: proc(
 	}
 
 	root_level_idx := len(block.tree_levels) - 1
+	// the 0 pos array level, always be placed the root hash
 	root_hash := block.tree_levels[root_level_idx][0] 
 
 	// clone it so `block.merkle_root` has its own memory
@@ -127,8 +129,31 @@ seal :: proc(
 }
 
 // request a merkle proof
-get_proof :: proc(block: ^Block($T, $K), tx_index: ^T) -> [][]byte {
+get_proof :: proc(block: ^Block($T, $K), id: K) -> [][]byte {
+	idx, found := block.tx_indices[id]
+	if !found do return nil
 	// fetch sibling hashes for a specific transaction
-	return nil
+	proof := make([dynamic][]byte)
+
+	// current transaction
+	current_idx := int(idx)
+	for level_idx := 0; level_idx < len(block.tree_levels) - 1; level_idx += 1 {
+		level := block.tree_levels[level_idx]
+
+		sibling_idx := current_idx % 2 == 0 ? current_idx + 1 : current_idx - 1
+
+		// if the level has an odd number of nodes, 
+		// the last node might be its own sibling
+		if sibling_idx < len(level) {
+			append(&proof, slice.clone(level[sibling_idx]))
+		} else {
+			append(&proof, slice.clone(level[current_idx]))
+		}
+
+		// move up to the parent's index in the next level
+		current_idx /= 2
+	}
+
+	return slice.clone(proof[:])
 }
 
