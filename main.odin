@@ -68,5 +68,8 @@ main :: proc() {
 
 	Blockchain.seal(&block, token_to_bytes, get_id)
 
-	proof: [][]byte = Blockchain.get_proof(&block, 15)
+	proof, ok := Blockchain.get_proof(&block, 15)
+	if ok {
+		fmt.println("proof: ", proof)
+	}
 }

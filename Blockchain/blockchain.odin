@@ -3,7 +3,6 @@ package Blockchain
 import "core:slice"
 import "core:crypto/hash"
 import "core:time"
-import "core:fmt"
 
 Block :: struct($T: typeid, $K: typeid) {
 	prev_block:   ^Block(T, K),
@@ -65,7 +64,7 @@ add_transactions :: proc(block: ^Block($T, $K), txs: ..T) {
 seal :: proc(
 	block: ^Block($T, $K),
 	serialize: proc(data: ^T, allocator := context.allocator) -> []byte,
-	get_id: proc(_: ^T) -> K,
+	get_id: proc(_: ^T) -> K, allocator := context.allocator
 ) {
 	// check that the lenght of `transactions` are even
 	if len(block.transactions) <= 0 do return
@@ -76,7 +75,7 @@ seal :: proc(
 	// fill level - and idex map
 	for &tx, i in block.transactions {
 		// use the context allocator to ensure we get a fresh copy
-		bytes: []byte = serialize(&tx, context.temp_allocator)
+		bytes: []byte = serialize(&tx, allocator)
 
 		hash_bytes: []byte = hash.hash_bytes(.SHA256, bytes)
 
@@ -101,15 +100,14 @@ seal :: proc(
 			if i + 1 < len(prev_level) do right_node = prev_level[i + 1]
 
 			// Hash( left_node + right_node )
-			combine_nodes := make([dynamic]byte, context.temp_allocator)
-			append(&combine_nodes, ..left_node)
-			append(&combine_nodes, ..right_node)
+			combined_nodes := make([]byte, len(left_node) + len(right_node), allocator)
+			copy(combined_nodes[:len(left_node)], left_node)
+			copy(combined_nodes[len(left_node):], right_node)
 
-			result: []byte = hash.hash_bytes(.SHA256, combine_nodes[:])
-			parent_hash := slice.clone(result)
+			parent_hash: []byte = hash.hash_bytes(.SHA256, combined_nodes)
 
 			// add hash parents to the next level
-			append(&next_level, parent_hash) 
+			append(&next_level, slice.clone(parent_hash)) 
 		}
 
 		// here it finished to process the level
@@ -120,20 +118,22 @@ seal :: proc(
 		current_level += 1
 	}
 
-	root_level_idx := len(block.tree_levels) - 1
 	// the 0 pos array level, always be placed the root hash
-	root_hash := block.tree_levels[root_level_idx][0] 
+	root_hash := block.tree_levels[len(block.tree_levels) - 1][0]
 
 	// clone it so `block.merkle_root` has its own memory
 	block.merkle_root = slice.clone(root_hash)
 }
 
 // request a merkle proof
-get_proof :: proc(block: ^Block($T, $K), id: K) -> [][]byte {
+get_proof :: proc(block: ^Block($T, $K), id: K, allocator := context.temp_allocator) -> (proof: [][]byte, ok: bool) {
 	idx, found := block.tx_indices[id]
-	if !found do return nil
+	if !found do return nil, false
+
+	tree_height := len(block.tree_levels) - 1
+	if tree_height <= 0 do return nil, true
 	// fetch sibling hashes for a specific transaction
-	proof := make([dynamic][]byte)
+	result := make([][]byte, tree_height, allocator)
 
 	// current transaction
 	current_idx := int(idx)
@@ -144,16 +144,19 @@ get_proof :: proc(block: ^Block($T, $K), id: K) -> [][]byte {
 
 		// if the level has an odd number of nodes, 
 		// the last node might be its own sibling
+		source_hash: []byte
 		if sibling_idx < len(level) {
-			append(&proof, slice.clone(level[sibling_idx]))
+			source_hash = level[sibling_idx]
 		} else {
-			append(&proof, slice.clone(level[current_idx]))
+			source_hash = level[current_idx]
 		}
+
+		result[level_idx] = slice.clone(source_hash, allocator)
 
 		// move up to the parent's index in the next level
 		current_idx /= 2
 	}
 
-	return slice.clone(proof[:])
+	return result, true
 }
 
