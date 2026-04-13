@@ -36,6 +36,7 @@ delete_block :: proc(block: ^Block($T, $K)) {
 	delete(block.transactions)
 	delete(block.tx_indices)
 	delete(block.merkle_root)
+	delete(block.prev_hash)
 
 	for level in block.tree_levels {
 		// level in [dynamic][]byte
@@ -48,6 +49,27 @@ delete_block :: proc(block: ^Block($T, $K)) {
 	}
 	// delete the outer container
 	delete(block.tree_levels)
+}
+
+hash_block :: proc(block: ^Block($T, $K), allocator := context.temp_allocator) -> []byte {
+	size := len(block.prev_hash) + len(block.merkle_root) + size_of(i64)
+	header_data := make([]byte, size, allocator)
+
+	offset := 0
+	if len(block.prev_hash) > 0 {
+        copy(header_data[offset:], block.prev_hash)
+        offset += len(block.prev_hash)
+    }
+
+	copy(header_data[offset:], block.merkle_root)
+	offset += len(block.merkle_root)
+
+	t_bytes := slice.bytes_from_ptr(&block.timestamp, size_of(i64))
+    copy(header_data[offset:], t_bytes)
+
+	final_hash := hash.hash_bytes(.SHA256, header_data)
+	delete(header_data, allocator)
+	return final_hash
 }
 
 // add data to the block
@@ -66,6 +88,10 @@ seal :: proc(
 	serialize: proc(data: ^T, allocator := context.allocator) -> []byte,
 	get_id: proc(_: ^T) -> K, allocator := context.allocator
 ) {
+	if block.prev_block != nil {
+		block.prev_hash = hash_block(block.prev_block, allocator)
+	}
+	
 	// check that the lenght of `transactions` are even
 	if len(block.transactions) <= 0 do return
 
@@ -83,6 +109,9 @@ seal :: proc(
 
 		// Map the custom ID type to the index
 		block.tx_indices[get_id(&tx)] = uint(i)
+
+		delete(bytes, allocator)
+		delete(hash_bytes)
 	}
 	append(&block.tree_levels, level_0)
 
@@ -108,6 +137,9 @@ seal :: proc(
 
 			// add hash parents to the next level
 			append(&next_level, slice.clone(parent_hash)) 
+
+			 delete(combined_nodes, allocator)
+			 delete(parent_hash)
 		}
 
 		// here it finished to process the level
@@ -160,3 +192,56 @@ get_proof :: proc(block: ^Block($T, $K), id: K, allocator := context.temp_alloca
 	return result, true
 }
 
+verify_proof :: proc(block: ^Block($T, $K), id: K, proof: [][]byte, allocator := context.temp_allocator) -> bool {
+	idx, found := block.tx_indices[id]
+	if !found do return false
+	
+	current_hash := slice.clone(block.tree_levels[0][idx], allocator)
+
+	// current transaction
+	current_idx := int(idx)
+
+	for sibling_hash in proof {
+		combined_nodes := make([]byte, len(sibling_hash) * 2, allocator)
+		// left side
+		if current_idx % 2 == 0 {
+			// [current][sibling]
+			copy(combined_nodes[:len(current_hash)], current_hash)
+			copy(combined_nodes[len(current_hash):], sibling_hash)
+		// right side
+		} else {
+			// [sibling][current]
+			copy(combined_nodes[:len(current_hash)], sibling_hash)
+			copy(combined_nodes[len(current_hash):], current_hash)
+		}
+
+		parent_hash: []byte = hash.hash_bytes(.SHA256, combined_nodes, allocator)
+		// clean up old current_hash
+		current_hash = parent_hash
+
+		// move up to the parent's index in the next level
+		current_idx /= 2
+	}
+	result := slice.equal(current_hash, block.merkle_root)
+
+	delete(current_hash, allocator)
+	return result
+}
+
+// Example: Verifying a transaction by traversing backwards
+verify_transaction_in_chain :: proc(latest_block: ^Block($T, $K), id: K, proof: [][]byte) -> bool {
+    curr := latest_block
+    
+    for curr != nil {
+        // does this block contain the transaction index?
+        if id in curr.tx_indices {
+            // We use the merkle_root found in this specific header
+            return verify_proof(curr, id, proof)
+        }
+        
+        // Move to previous block
+        curr = curr.prev_block
+    }
+    
+    return false
+}
